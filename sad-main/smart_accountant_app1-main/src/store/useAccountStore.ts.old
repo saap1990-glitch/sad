@@ -1,0 +1,58 @@
+import { create } from 'zustand';
+
+let db: any = null;
+export const setDatabase = (database: any) => { db = database; };
+
+export const useAccountStore = create<any>((set, get) => ({
+  accounts: [],
+  loading: false,
+  error: null,
+
+  loadAccounts: async () => {
+    if (!db) {
+      set({ error: 'Database not initialized' });
+      return;
+    }
+    set({ loading: true, error: null });
+    try {
+      const result = await db.getAllAsync('SELECT * FROM accounts WHERE isActive=1 OR isActive IS NULL ORDER BY code');
+      set({ accounts: result, loading: false });
+    } catch (e: any) {
+      set({ error: e.message, loading: false });
+    }
+  },
+
+  addAccount: async (acc: any) => {
+    if (!db) return { success: false, error: 'Database not ready' };
+    const id = 'acc-' + Date.now();
+    const code = acc.code || get().generateCode(acc.parentId);
+    await db.runAsync('INSERT INTO accounts (id,code,name,type,parentId,isDebit,isActive,balance,currency) VALUES (?,?,?,?,?,?,1,?,?)',
+      [id, code, acc.name, acc.type, acc.parentId || '', acc.isDebit ?? 1, acc.balance || 0, acc.currency || 'YER']);
+    await get().loadAccounts();
+    return { success: true, id };
+  },
+
+  updateAccount: async (id: string, updates: any) => {
+    if (!db) return;
+    if (updates.name) await db.runAsync('UPDATE accounts SET name=? WHERE id=?', [updates.name, id]);
+    if (updates.balance !== undefined) await db.runAsync('UPDATE accounts SET balance=? WHERE id=?', [updates.balance, id]);
+    await get().loadAccounts();
+  },
+
+  removeAccount: async (id: string) => {
+    if (!db) return;
+    await db.runAsync('UPDATE accounts SET isActive=0 WHERE id=?', [id]);
+    await get().loadAccounts();
+  },
+
+  getMainAccounts: () => get().accounts.filter((a: any) => !a.parentId || a.parentId === ''),
+  getSubAccounts: (pid: string) => get().accounts.filter((a: any) => a.parentId === pid),
+  
+  generateCode: (pid?: string) => {
+    const a = get().accounts;
+    if (!pid) return String(a.filter((x: any) => !x.parentId || x.parentId === '').length + 1);
+    const siblings = a.filter((x: any) => x.parentId === pid);
+    const parent = a.find((x: any) => x.id === pid);
+    return (parent?.code || '') + (siblings.length + 1).toString().padStart(2, '0');
+  },
+}));

@@ -1,0 +1,38 @@
+import * as SQLite from 'expo-sqlite';
+
+let db: any = null;
+const getDB = async () => { if (!db) db = await SQLite.openDatabaseAsync('smart_accountant.db'); return db; };
+
+export const accountRepository = {
+  async findAll() {
+    const d = await getDB();
+    return d.getAllAsync('SELECT * FROM accounts WHERE isActive=1 OR isActive IS NULL ORDER BY code');
+  },
+
+  async findById(id: string) {
+    const d = await getDB();
+    return d.getFirstAsync('SELECT * FROM accounts WHERE id=?', [id]);
+  },
+
+  async findByParent(parentId: string) {
+    const d = await getDB();
+    return d.getAllAsync('SELECT * FROM accounts WHERE parentId=? AND (isActive=1 OR isActive IS NULL) ORDER BY code', [parentId]);
+  },
+
+  async create(account: any) {
+    const d = await getDB();
+    const id = 'acc-' + Date.now();
+    await d.runAsync('INSERT INTO accounts (id,code,name,type,parentId,isDebit,balance,isActive) VALUES (?,?,?,?,?,?,?,1)', [id, account.code, account.name, account.type, account.parentId || '', account.isDebit ?? 1, account.balance || 0]);
+    return { id };
+  },
+
+  async updateBalance(id: string, amount: number) {
+    const d = await getDB();
+    await d.runAsync('UPDATE accounts SET balance = COALESCE(balance,0) + ? WHERE id = ?', [amount, id]);
+  },
+
+  async remove(id: string) {
+    const d = await getDB();
+    await d.runAsync('UPDATE accounts SET isActive=0 WHERE id=?', [id]);
+  },
+};

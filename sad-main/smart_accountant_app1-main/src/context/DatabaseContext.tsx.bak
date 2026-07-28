@@ -1,0 +1,152 @@
+import React, { createContext, useContext, useEffect, useState, ReactNode } from 'react';
+import * as SQLite from 'expo-sqlite';
+
+interface DatabaseContextType {
+  db: SQLite.SQLiteDatabase | null;
+  isReady: boolean;
+}
+
+const DatabaseContext = createContext<DatabaseContextType>({ db: null, isReady: false });
+
+const DB_VERSION = 1;
+
+export function DBProvider({ children }: { children: ReactNode }) {
+  const [db, setDb] = useState<SQLite.SQLiteDatabase | null>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    async function init() {
+      try {
+        const database = await SQLite.openDatabaseAsync('smart_accountant.db', { useNewConnection: true });
+        await database.execAsync('PRAGMA journal_mode = WAL');
+
+        // إنشاء جدول app_settings أولاً
+        await database.execAsync("CREATE TABLE IF NOT EXISTS app_settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE, value TEXT)");
+
+        // التحقق من الإصدار
+        let version: any = null;
+        try {
+          version = await database.getFirstAsync("SELECT value FROM app_settings WHERE key='db_version'");
+        } catch (e) {}
+
+        const currentVersion = version ? parseInt(version.value) : 0;
+
+        // تطبيق migrations
+        if (currentVersion < 1) {
+          await createAllTables(database);
+          await seedInitialData(database);
+        }
+
+        // تحديث الإصدار
+        await database.runAsync("INSERT OR REPLACE INTO app_settings (key, value) VALUES ('db_version', ?)", [String(DB_VERSION)]);
+
+        if (mounted) {
+          setDb(database);
+          setIsReady(true);
+        }
+      } catch (error) {
+        console.error('DB Error:', error);
+        if (mounted) {
+          setIsReady(true);
+        }
+      }
+    }
+    init();
+    return () => { mounted = false; };
+  }, []);
+
+  return (
+    <DatabaseContext.Provider value={{ db, isReady }}>
+      {children}
+    </DatabaseContext.Provider>
+  );
+}
+
+export function useDatabase() {
+  return useContext(DatabaseContext);
+}
+
+async function createAllTables(db: SQLite.SQLiteDatabase) {
+  const sql = `
+    CREATE TABLE IF NOT EXISTS currencies (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, name_ar TEXT, name_en TEXT, symbol TEXT, is_base INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS exchange_rates (id INTEGER PRIMARY KEY AUTOINCREMENT, currency_id INTEGER, rate REAL, date TEXT);
+    CREATE TABLE IF NOT EXISTS accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT UNIQUE, name_ar TEXT, name_en TEXT, parent_id INTEGER, level INTEGER DEFAULT 1, type TEXT, nature TEXT, currency_id INTEGER, opening_balance REAL DEFAULT 0, current_balance REAL DEFAULT 0, is_postable INTEGER DEFAULT 1, is_virtual INTEGER DEFAULT 0, is_system INTEGER DEFAULT 0, is_leaf INTEGER DEFAULT 0, is_active INTEGER DEFAULT 1, notes TEXT);
+    CREATE TABLE IF NOT EXISTS account_links (id INTEGER PRIMARY KEY AUTOINCREMENT, module TEXT, entity_type TEXT, entity_id INTEGER, account_id INTEGER);
+    CREATE TABLE IF NOT EXISTS system_accounts (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE, account_id INTEGER, description TEXT);
+    CREATE TABLE IF NOT EXISTS customers (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, code TEXT, name_ar TEXT, phone TEXT, email TEXT, address TEXT, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS suppliers (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, code TEXT, name_ar TEXT, phone TEXT, email TEXT, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS banks (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, name_ar TEXT, account_number TEXT, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS cash_boxes (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, name_ar TEXT, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS exchange_companies (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, name_ar TEXT, buy_rate REAL, sell_rate REAL, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS wallets (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, name_ar TEXT, wallet_number TEXT, company TEXT, balance REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS products (id INTEGER PRIMARY KEY AUTOINCREMENT, code TEXT, name_ar TEXT, sale_price REAL DEFAULT 0, purchase_price REAL DEFAULT 0, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS warehouses (id INTEGER PRIMARY KEY AUTOINCREMENT, account_id INTEGER, name_ar TEXT, is_active INTEGER DEFAULT 1);
+    CREATE TABLE IF NOT EXISTS categories (id INTEGER PRIMARY KEY AUTOINCREMENT, name_ar TEXT);
+    CREATE TABLE IF NOT EXISTS units (id INTEGER PRIMARY KEY AUTOINCREMENT, name_ar TEXT);
+    CREATE TABLE IF NOT EXISTS brands (id INTEGER PRIMARY KEY AUTOINCREMENT, name_ar TEXT);
+    CREATE TABLE IF NOT EXISTS journal_entries (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_number TEXT UNIQUE, date TEXT, description TEXT, total_debit REAL DEFAULT 0, total_credit REAL DEFAULT 0, source_type TEXT, is_posted INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS journal_lines (id INTEGER PRIMARY KEY AUTOINCREMENT, entry_id INTEGER, account_id INTEGER, description TEXT, debit REAL DEFAULT 0, credit REAL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS sales_invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_number TEXT UNIQUE, date TEXT, customer_id INTEGER, total REAL DEFAULT 0, tax REAL DEFAULT 0, discount REAL DEFAULT 0, net_total REAL DEFAULT 0, status TEXT DEFAULT 'draft');
+    CREATE TABLE IF NOT EXISTS sales_invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, product_id INTEGER, quantity REAL DEFAULT 0, price REAL DEFAULT 0, total REAL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS purchase_invoices (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_number TEXT UNIQUE, date TEXT, supplier_id INTEGER, total REAL DEFAULT 0, net_total REAL DEFAULT 0, status TEXT DEFAULT 'draft');
+    CREATE TABLE IF NOT EXISTS purchase_invoice_items (id INTEGER PRIMARY KEY AUTOINCREMENT, invoice_id INTEGER, product_id INTEGER, quantity REAL DEFAULT 0, price REAL DEFAULT 0, total REAL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY AUTOINCREMENT, key TEXT UNIQUE, value TEXT, "group" TEXT DEFAULT 'general');
+    CREATE TABLE IF NOT EXISTS number_sequences (id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT, prefix TEXT, current_number INTEGER DEFAULT 1, padding INTEGER DEFAULT 4);
+    CREATE TABLE IF NOT EXISTS backup_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT, size INTEGER, type TEXT DEFAULT 'manual', created_at TEXT DEFAULT (datetime('now')));
+    CREATE TABLE IF NOT EXISTS audit_logs (id INTEGER PRIMARY KEY AUTOINCREMENT, entity_type TEXT, entity_id INTEGER, action TEXT, user TEXT DEFAULT 'user', timestamp TEXT DEFAULT (datetime('now')));
+  `;
+
+  const stmts = sql.split(';').filter(s => s.trim());
+  for (const s of stmts) {
+    try { await db.execAsync(s + ';'); } catch (e) {}
+  }
+}
+
+async function seedInitialData(db: SQLite.SQLiteDatabase) {
+  try {
+    const count = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM accounts');
+    if ((count as any)?.cnt > 0) return;
+  } catch (e) { return; }
+
+  await db.runAsync("INSERT INTO currencies (code, name_ar, symbol, is_base) VALUES ('YER','ريال يمني','﷼',1)");
+  await db.runAsync("INSERT INTO currencies (code, name_ar, symbol) VALUES ('USD','دولار','$'),('SAR','ريال سعودي','﷼')");
+  await db.runAsync("INSERT INTO settings (key, value, \"group\") VALUES ('language','ar','system'),('theme','dark','system')");
+
+  const accs: [string, string, string, number, string, string][] = [
+    ['1','الأصول','Assets',1,'asset','debit'],['2','الخصوم','Liabilities',1,'liability','credit'],
+    ['3','المصروفات','Expenses',1,'expense','debit'],['4','الإيرادات','Revenues',1,'revenue','credit'],
+    ['11','الأصول المتداولة','Current Assets',2,'asset','debit'],['12','الأصول غير المتداولة','Non-Current Assets',2,'asset','debit'],
+    ['21','الخصوم المتداولة','Current Liabilities',2,'liability','credit'],['31','المصروفات التشغيلية','Operating Expenses',2,'expense','debit'],
+    ['41','إيرادات النشاط الرئيسي','Main Revenue',2,'revenue','credit'],
+    ['1101','الصندوق','Cash',3,'asset','debit'],['1102','البنوك','Banks',3,'asset','debit'],
+    ['1103','شركات الصرافة','Exchange',3,'asset','debit'],['1104','المحافظ الإلكترونية','Wallets',3,'asset','debit'],
+    ['1105','العملاء','Customers',3,'asset','debit'],['1106','المخزون','Inventory',3,'asset','debit'],
+    ['2101','الموردون','Suppliers',3,'liability','credit'],['3101','الرواتب','Salaries',3,'expense','debit'],
+    ['4101','المبيعات','Sales',3,'revenue','credit'],['110101','الصندوق الرئيسي','Main Cash',4,'asset','debit'],
+  ];
+
+  for (const [code, name_ar, name_en, level, type, nature] of accs) {
+    await db.runAsync('INSERT INTO accounts (code, name_ar, name_en, parent_id, level, type, nature, currency_id, opening_balance, current_balance, is_postable, is_virtual, is_system, is_leaf, is_active, notes) VALUES (?,?,?,NULL,?,?,?,1,0,0,1,0,1,1,?,?)', [code, name_ar, name_en, level, type, nature]);
+  }
+  await db.runAsync("UPDATE accounts SET is_leaf=1, is_postable=1, is_virtual=0 WHERE code='110101'");
+
+  const parents: [string, string][] = [
+    ['11','1'],['12','1'],['21','2'],['31','3'],['41','4'],
+    ['1101','11'],['1102','11'],['1103','11'],['1104','11'],['1105','11'],['1106','11'],
+    ['2101','21'],['3101','31'],['4101','41'],['110101','1101'],
+  ];
+  for (const [code, pCode] of parents) {
+    const p = await db.getFirstAsync('SELECT id FROM accounts WHERE code=?', [pCode]) as any;
+    if (p) await db.runAsync('UPDATE accounts SET parent_id=? WHERE code=?', [p.id, code]);
+  }
+
+  const sys: [string, string][] = [
+    ['cash_account','110101'],['sales_account','4101'],['customer_parent','1105'],
+    ['supplier_parent','2101'],['bank_parent','1102'],['exchange_parent','1103'],['wallet_parent','1104'],
+  ];
+  for (const [key, code] of sys) {
+    const a = await db.getFirstAsync('SELECT id FROM accounts WHERE code=?', [code]) as any;
+    if (a) await db.runAsync('INSERT INTO system_accounts (key, account_id) VALUES (?,?)', [key, a.id]);
+  }
+}
