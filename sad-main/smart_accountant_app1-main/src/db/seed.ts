@@ -1,111 +1,82 @@
-import * as SQLite from 'expo-sqlite';
-import { SCHEMA, ALL_TABLES } from './schema';
+import { SQLiteDatabase } from 'expo-sqlite';
 
-export async function initializeDatabase(db: SQLite.SQLiteDatabase) {
-  // إنشاء جميع الجداول
-  for (const sql of ALL_TABLES) {
-    await db.execAsync(sql);
-  }
-
-  // التحقق من وجود بيانات
+export async function seedAccounts(db: SQLiteDatabase) {
   const count = await db.getFirstAsync('SELECT COUNT(*) as cnt FROM accounts');
-  if ((count as any)?.cnt > 0) return;
+  if ((count as any).cnt > 0) return;
 
-  // العملات
-  await db.runAsync(`INSERT OR IGNORE INTO currencies (code, name_ar, name_en, symbol, is_base) VALUES 
-    ('YER', 'ريال يمني', 'Yemeni Rial', '﷼', 1),
-    ('USD', 'دولار أمريكي', 'US Dollar', '$', 0),
-    ('SAR', 'ريال سعودي', 'Saudi Riyal', '﷼', 0),
-    ('EUR', 'يورو', 'Euro', '€', 0)
+  // إدخال العملات الأساسية
+  await db.runAsync(`INSERT INTO currencies (code, name_ar, symbol, exchange_rate, is_base, is_active) VALUES 
+    ('YER', 'ريال يمني', '﷼', 1, 1, 1),
+    ('USD', 'دولار أمريكي', '$', 250, 0, 1),
+    ('SAR', 'ريال سعودي', '﷼', 66, 0, 1)
   `);
 
-  // الإعدادات الافتراضية
-  const defaultSettings = [
-    ['language', 'ar', 'system'], ['theme', 'dark', 'system'],
-    ['direction', 'rtl', 'system'], ['fiscal_year_start', '01-01', 'fiscalYear'],
-    ['fiscal_year_end', '12-31', 'fiscalYear'], ['auto_number_accounts', 'true', 'accounts'],
-    ['max_account_levels', '5', 'accounts'], ['default_currency', 'YER', 'currency'],
-    ['decimals', '2', 'currency'],
-  ];
-  for (const [k, v, g] of defaultSettings) {
-    await db.runAsync('INSERT OR IGNORE INTO settings (key, value, "group") VALUES (?,?,?)', [k, v, g]);
-  }
+  // حسابات المستوى الأول
+  await db.runAsync(`INSERT INTO accounts (code, name_ar, name_en, level, type, nature, is_virtual, is_leaf, is_system, is_active) VALUES 
+    ('1', 'الأصول', 'Assets', 1, 'asset', 'debit', 1, 0, 1, 1),
+    ('2', 'الخصوم', 'Liabilities', 1, 'liability', 'credit', 1, 0, 1, 1),
+    ('3', 'المصروفات', 'Expenses', 1, 'expense', 'debit', 1, 0, 1, 1),
+    ('4', 'الإيرادات', 'Revenues', 1, 'revenue', 'credit', 1, 0, 1, 1)
+  `);
 
-  // دليل الحسابات
+  // حسابات المستوى الثاني والثالث (اختصارًا)
   const accounts = [
-    { code: '1', name_ar: 'الأصول', name_en: 'Assets', level: 1, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '2', name_ar: 'الخصوم', name_en: 'Liabilities', level: 1, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3', name_ar: 'المصروفات', name_en: 'Expenses', level: 1, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '4', name_ar: 'الإيرادات', name_en: 'Revenues', level: 1, type: 'revenue', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    // المستوى 2
-    { code: '11', name_ar: 'الأصول المتداولة', name_en: 'Current Assets', level: 2, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '12', name_ar: 'الأصول غير المتداولة', name_en: 'Non-Current Assets', level: 2, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '21', name_ar: 'الخصوم المتداولة', name_en: 'Current Liabilities', level: 2, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '22', name_ar: 'الخصوم طويلة الأجل', name_en: 'Long-term Liabilities', level: 2, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '31', name_ar: 'المصروفات التشغيلية', name_en: 'Operating Expenses', level: 2, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '32', name_ar: 'المصروفات الإدارية', name_en: 'Admin Expenses', level: 2, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '33', name_ar: 'المصروفات البيعية', name_en: 'Selling Expenses', level: 2, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '41', name_ar: 'إيرادات النشاط الرئيسي', name_en: 'Main Revenue', level: 2, type: 'revenue', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '42', name_ar: 'الإيرادات الأخرى', name_en: 'Other Revenue', level: 2, type: 'revenue', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    // المستوى 3
-    { code: '1101', name_ar: 'الصندوق', name_en: 'Cash', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1102', name_ar: 'البنوك', name_en: 'Banks', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1103', name_ar: 'شركات الصرافة', name_en: 'Exchange Companies', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1104', name_ar: 'المحافظ الإلكترونية', name_en: 'E-Wallets', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1105', name_ar: 'العملاء', name_en: 'Customers', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1106', name_ar: 'المخزون', name_en: 'Inventory', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '1107', name_ar: 'العهد', name_en: 'Advances', level: 3, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '2101', name_ar: 'الموردون', name_en: 'Suppliers', level: 3, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '2102', name_ar: 'الضرائب المستحقة', name_en: 'Taxes Payable', level: 3, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '2103', name_ar: 'الرواتب المستحقة', name_en: 'Accrued Salaries', level: 3, type: 'liability', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3101', name_ar: 'الرواتب', name_en: 'Salaries', level: 3, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3102', name_ar: 'الإيجارات', name_en: 'Rent', level: 3, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3103', name_ar: 'الكهرباء والمياه', name_en: 'Utilities', level: 3, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3104', name_ar: 'الاتصالات', name_en: 'Telecom', level: 3, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '3105', name_ar: 'الصيانة', name_en: 'Maintenance', level: 3, type: 'expense', nature: 'debit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '4101', name_ar: 'المبيعات', name_en: 'Sales', level: 3, type: 'revenue', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    { code: '4102', name_ar: 'إيرادات الخدمات', name_en: 'Service Revenue', level: 3, type: 'revenue', nature: 'credit', is_system: 1, is_virtual: 1, is_leaf: 0, is_postable: 0 },
-    // حسابات نهائية
-    { code: '110101', name_ar: 'الصندوق الرئيسي', name_en: 'Main Cash', level: 4, type: 'asset', nature: 'debit', is_system: 1, is_virtual: 0, is_leaf: 1, is_postable: 1 },
+    // الأصول
+    { code: '11', name_ar: 'الأصول المتداولة', level: 2, type: 'asset', nature: 'debit', parent: '1' },
+    { code: '12', name_ar: 'الأصول غير المتداولة', level: 2, type: 'asset', nature: 'debit', parent: '1' },
+    { code: '1101', name_ar: 'الصندوق', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1102', name_ar: 'البنوك', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1103', name_ar: 'شركات الصرافة', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1104', name_ar: 'المحافظ الإلكترونية', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1105', name_ar: 'العملاء', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1106', name_ar: 'المخزون', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1107', name_ar: 'العهد', level: 3, type: 'asset', nature: 'debit', parent: '11' },
+    { code: '1201', name_ar: 'الأراضي', level: 3, type: 'asset', nature: 'debit', parent: '12' },
+    { code: '1202', name_ar: 'المباني', level: 3, type: 'asset', nature: 'debit', parent: '12' },
+    { code: '1203', name_ar: 'السيارات', level: 3, type: 'asset', nature: 'debit', parent: '12' },
+    { code: '1204', name_ar: 'الأجهزة', level: 3, type: 'asset', nature: 'debit', parent: '12' },
+    { code: '1205', name_ar: 'الأثاث', level: 3, type: 'asset', nature: 'debit', parent: '12' },
+    // الخصوم
+    { code: '21', name_ar: 'الخصوم المتداولة', level: 2, type: 'liability', nature: 'credit', parent: '2' },
+    { code: '22', name_ar: 'الخصوم طويلة الأجل', level: 2, type: 'liability', nature: 'credit', parent: '2' },
+    { code: '2101', name_ar: 'الموردون', level: 3, type: 'liability', nature: 'credit', parent: '21' },
+    { code: '2102', name_ar: 'أوراق الدفع', level: 3, type: 'liability', nature: 'credit', parent: '21' },
+    { code: '2103', name_ar: 'الرواتب المستحقة', level: 3, type: 'liability', nature: 'credit', parent: '21' },
+    { code: '2104', name_ar: 'الضرائب المستحقة', level: 3, type: 'liability', nature: 'credit', parent: '21' },
+    { code: '2201', name_ar: 'قروض طويلة الأجل', level: 3, type: 'liability', nature: 'credit', parent: '22' },
+    // المصروفات
+    { code: '31', name_ar: 'المصروفات التشغيلية', level: 2, type: 'expense', nature: 'debit', parent: '3' },
+    { code: '32', name_ar: 'المصروفات الإدارية', level: 2, type: 'expense', nature: 'debit', parent: '3' },
+    { code: '33', name_ar: 'المصروفات البيعية', level: 2, type: 'expense', nature: 'debit', parent: '3' },
+    { code: '3101', name_ar: 'الرواتب', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3102', name_ar: 'الإيجارات', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3103', name_ar: 'الكهرباء والمياه', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3104', name_ar: 'الاتصالات', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3105', name_ar: 'الصيانة', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3106', name_ar: 'الوقود', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3107', name_ar: 'النقل', level: 3, type: 'expense', nature: 'debit', parent: '31' },
+    { code: '3201', name_ar: 'القرطاسية', level: 3, type: 'expense', nature: 'debit', parent: '32' },
+    { code: '3202', name_ar: 'مصروف بنكي', level: 3, type: 'expense', nature: 'debit', parent: '32' },
+    // الإيرادات
+    { code: '41', name_ar: 'إيرادات النشاط الرئيسي', level: 2, type: 'revenue', nature: 'credit', parent: '4' },
+    { code: '42', name_ar: 'الإيرادات الأخرى', level: 2, type: 'revenue', nature: 'credit', parent: '4' },
+    { code: '4101', name_ar: 'المبيعات', level: 3, type: 'revenue', nature: 'credit', parent: '41' },
+    { code: '4102', name_ar: 'إيرادات الخدمات', level: 3, type: 'revenue', nature: 'credit', parent: '41' },
+    { code: '4201', name_ar: 'إيراد آخر', level: 3, type: 'revenue', nature: 'credit', parent: '42' },
   ];
 
   for (const acc of accounts) {
-    await db.runAsync(
-      `INSERT OR IGNORE INTO accounts (code, name_ar, name_en, level, type, nature, is_system, is_virtual, is_leaf, is_postable) VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [acc.code, acc.name_ar, acc.name_en, acc.level, acc.type, acc.nature, acc.is_system, acc.is_virtual, acc.is_leaf, acc.is_postable]
-    );
-  }
-
-  // حسابات النظام
-  const sysAccounts = [
-    ['cash_account', '110101', 'حساب الصندوق الافتراضي'],
-    ['sales_account', '4101', 'حساب المبيعات'],
-    ['customer_parent', '1105', 'الحساب الأب للعملاء'],
-    ['supplier_parent', '2101', 'الحساب الأب للموردين'],
-    ['bank_parent', '1102', 'الحساب الأب للبنوك'],
-    ['exchange_parent', '1103', 'الحساب الأب لشركات الصرافة'],
-    ['wallet_parent', '1104', 'الحساب الأب للمحافظ'],
-  ];
-
-  for (const [key, code, desc] of sysAccounts) {
-    const acc = await db.getFirstAsync('SELECT id FROM accounts WHERE code = ?', [code]) as any;
-    if (acc) {
-      await db.runAsync('INSERT OR IGNORE INTO system_accounts (key, account_id, description) VALUES (?,?,?)', [key, acc.id, desc]);
+    const parentRow = await db.getFirstAsync('SELECT id FROM accounts WHERE code = ?', [acc.parent]) as any;
+    if (parentRow) {
+      await db.runAsync(
+        `INSERT INTO accounts (code, name_ar, level, type, nature, parent_id, is_virtual, is_leaf, is_system, is_active) VALUES (?,?,?,?,?,?,1,0,1,1)`,
+        [acc.code, acc.name_ar, acc.level, acc.type, acc.nature, parentRow.id]
+      );
     }
   }
 
-  // إعدادات الترقيم
-  const sequences = [
-    ['account', '', '', 1, 4],
-    ['customer', 'CUST-', '', 1, 4],
-    ['supplier', 'SUPP-', '', 1, 4],
-    ['journal', 'JV-', '', 1, 4],
-    ['invoice_sale', 'INV-S-', '', 1, 4],
-    ['invoice_purchase', 'INV-P-', '', 1, 4],
-  ];
-  for (const [type, pre, suf, num, pad] of sequences) {
-    await db.runAsync('INSERT OR IGNORE INTO number_sequences (entity_type, prefix, suffix, current_number, padding) VALUES (?,?,?,?,?)', [type, pre, suf, num, pad]);
-  }
+  // إضافة حساب نقدي فعلي (ورقة)
+  await db.runAsync(`INSERT INTO accounts (code, name_ar, level, type, nature, parent_id, is_leaf, is_active) VALUES ('110101', 'الصندوق الرئيسي', 4, 'asset', 'debit', (SELECT id FROM accounts WHERE code='1101'), 1, 1)`);
 
-  console.log('✅ Seed completed');
+  console.log('✅ تم إدراج الحسابات الأساسية');
 }
